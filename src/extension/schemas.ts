@@ -107,7 +107,10 @@ export const SubagentParams = Type.Object({
 		description: "Management/control action. Omit for execution mode."
 	})),
 	id: Type.Optional(Type.String({
-		description: "Run id or prefix for action='status', action='interrupt', or action='resume'."
+		description: "Run id or prefix for action='status', action='interrupt', action='resume', action='tree', or action='events'."
+	})),
+	type: Type.Optional(Type.String({
+		description: "Event type or prefix filter for action='events' (for example 'subagent.step.*')."
 	})),
 	runId: Type.Optional(Type.String({
 		description: "Target run ID for action='interrupt' or action='resume'. Defaults to the most recently active controllable run for interrupt. Prefer id for new calls."
@@ -127,7 +130,12 @@ export const SubagentParams = Type.Object({
 			{ type: "object", additionalProperties: true },
 			{ type: "string" },
 		],
-		description: "Agent or chain config for create/update. Agent: name, package (optional namespace; runtime name becomes package.name), description, scope ('user'|'project', default 'user'), systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, defaultContext ('fresh'|'fork'), model, tools (comma-separated), extensions (comma-separated), skills (comma-separated), thinking, output, reads, progress, maxSubagentDepth. Chain: name, package, description, scope, steps (array of {agent, task?, output?, outputMode?, reads?, model?, skill?, progress?}). Presence of 'steps' creates a chain instead of an agent. String values must be valid JSON."
+		description: "Agent or chain config for create/update. Agent: name, package (optional namespace; runtime name becomes package.name), description, scope ('user'|'project', default 'user'), systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, defaultContext ('fresh'|'fork'), model, tools (comma-separated), extensions (comma-separated), skills (comma-separated), thinking, output, reads, progress, maxSubagentDepth, delegation fields (canDelegate, allowedChildAgents, maxChildren, maxParallelChildren, budgetTokens, budgetDollars, capabilities, coordinationModes, allowedCoordinationActions). Chain: name, package, description, scope, steps (array of {agent, task?, output?, outputMode?, reads?, model?, skill?, progress?}). Presence of 'steps' creates a chain instead of an agent. String values must be valid JSON."
+	})),
+	coord: Type.Optional(Type.Unsafe({
+		type: "object",
+		additionalProperties: true,
+		description: "Coordination payload for action='coordination'. Includes op, rootRunId, scope/key/value, task/taskId, finding, decision, artifact, auctionId, bid, winners, or score depending on op.",
 	})),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{agent, task, count?, output?, outputMode?, reads?, progress?}, ...]" })),
 	concurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Top-level PARALLEL mode only: max concurrent tasks. Defaults to config.parallel.concurrency or 4." })),

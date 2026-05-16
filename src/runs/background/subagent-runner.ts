@@ -40,6 +40,7 @@ import {
 	MAX_PARALLEL_CONCURRENCY,
 } from "../shared/parallel-utils.ts";
 import { buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
+import { buildEventEnvelope, envelopEvent, type EventEnvelopeContext } from "../shared/event-envelope.ts";
 import { formatModelAttemptNote, isRetryableModelFailure } from "../shared/model-fallback.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput } from "../../shared/utils.ts";
@@ -68,6 +69,7 @@ import {
 } from "../shared/worktree.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { writeInitialProgressFile } from "../../shared/settings.ts";
+import { QUESTION_ANSWERED, QUESTION_ASKED, STATUS_CHANGED } from "../../coordination/event-types.ts";
 
 interface SubagentRunConfig {
 	id: string;
@@ -83,6 +85,8 @@ interface SubagentRunConfig {
 	share?: boolean;
 	sessionDir?: string;
 	asyncDir: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	sessionId?: string | null;
 	piPackageRoot?: string;
 	piArgv1?: string;
@@ -164,6 +168,8 @@ function resetStepLiveDetail(step: RunnerStatusStep): void {
 interface ChildEventContext {
 	eventsPath: string;
 	runId: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	stepIndex: number;
 	agent: string;
 }
@@ -247,14 +253,20 @@ function runPiStreaming(
 
 		const appendChildEvent = (event: Record<string, unknown>) => {
 			if (!childEventContext) return;
-			appendJsonl(childEventContext.eventsPath, JSON.stringify({
+			appendJsonl(childEventContext.eventsPath, JSON.stringify(envelopEvent({
+				runId: childEventContext.runId,
+				parentRunId: childEventContext.parentRunId,
+				rootRunId: childEventContext.rootRunId,
+				agent: childEventContext.agent,
+				index: childEventContext.stepIndex,
+			}, {
 				...event,
 				subagentSource: "child",
 				subagentRunId: childEventContext.runId,
 				subagentStepIndex: childEventContext.stepIndex,
 				subagentAgent: childEventContext.agent,
 				observedAt: Date.now(),
-			}));
+			})));
 		};
 
 		const appendChildLine = (type: "subagent.child.stdout" | "subagent.child.stderr", line: string) => {
@@ -538,6 +550,8 @@ interface SingleStepContext {
 	artifactsDir?: string;
 	artifactConfig?: Partial<ArtifactConfig>;
 	id: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	flatIndex: number;
 	flatStepCount: number;
 	outputFile: string;
@@ -618,6 +632,8 @@ async function runSingleStep(
 			intercomSessionName: ctx.childIntercomTarget,
 			orchestratorIntercomTarget: ctx.orchestratorIntercomTarget,
 			runId: ctx.id,
+			parentRunId: ctx.parentRunId,
+			rootRunId: ctx.rootRunId,
 			childAgentName: step.agent,
 			childIndex: ctx.flatIndex,
 		});
@@ -629,7 +645,7 @@ async function runSingleStep(
 			ctx.piPackageRoot,
 			ctx.piArgv1,
 			step.maxSubagentDepth,
-			{ eventsPath, runId: ctx.id, stepIndex: ctx.flatIndex, agent: step.agent },
+			{ eventsPath, runId: ctx.id, parentRunId: ctx.parentRunId, rootRunId: ctx.rootRunId, stepIndex: ctx.flatIndex, agent: step.agent },
 			ctx.registerInterrupt,
 			ctx.onChildEvent,
 		);
@@ -767,6 +783,8 @@ function markParallelGroupSetupFailure(input: {
 	eventsPath: string;
 	asyncDir: string;
 	runId: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	stepIndex: number;
 }): void {
 	for (let taskIndex = 0; taskIndex < input.group.parallel.length; taskIndex++) {
@@ -782,13 +800,16 @@ function markParallelGroupSetupFailure(input: {
 	input.statusPayload.lastUpdate = input.failedAt;
 	input.statusPayload.outputFile = path.join(input.asyncDir, `output-${input.groupStartFlatIndex}.log`);
 	writeAtomicJson(input.statusPath, input.statusPayload);
-	appendJsonl(input.eventsPath, JSON.stringify({
+	appendJsonl(input.eventsPath, JSON.stringify(envelopEvent({
+		runId: input.runId,
+		parentRunId: input.parentRunId,
+		rootRunId: input.rootRunId ?? input.runId,
+	}, {
 		type: "subagent.parallel.completed",
 		ts: input.failedAt,
-		runId: input.runId,
 		stepIndex: input.stepIndex,
 		success: false,
-	}));
+	})));
 }
 
 function markParallelGroupRunning(input: {
@@ -800,6 +821,8 @@ function markParallelGroupRunning(input: {
 	eventsPath: string;
 	asyncDir: string;
 	runId: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	stepIndex: number;
 }): void {
 	for (let taskIndex = 0; taskIndex < input.group.parallel.length; taskIndex++) {
@@ -818,14 +841,17 @@ function markParallelGroupRunning(input: {
 	input.statusPayload.lastUpdate = input.groupStartTime;
 	input.statusPayload.outputFile = path.join(input.asyncDir, `output-${input.groupStartFlatIndex}.log`);
 	writeAtomicJson(input.statusPath, input.statusPayload);
-	appendJsonl(input.eventsPath, JSON.stringify({
+	appendJsonl(input.eventsPath, JSON.stringify(envelopEvent({
+		runId: input.runId,
+		parentRunId: input.parentRunId,
+		rootRunId: input.rootRunId ?? input.runId,
+	}, {
 		type: "subagent.parallel.started",
 		ts: input.groupStartTime,
-		runId: input.runId,
 		stepIndex: input.stepIndex,
 		agents: input.group.parallel.map((task) => task.agent),
 		count: input.group.parallel.length,
-	}));
+	})));
 }
 
 function prepareParallelTaskRun(
@@ -873,6 +899,18 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const statusPath = path.join(asyncDir, "status.json");
 	const eventsPath = path.join(asyncDir, "events.jsonl");
 	const logPath = path.join(asyncDir, `subagent-log-${id}.md`);
+	const envelopeContext: EventEnvelopeContext = {
+		runId: id,
+		parentRunId: config.parentRunId,
+		rootRunId: config.rootRunId ?? id,
+	};
+	const appendRunEvent = (event: Record<string, unknown>, agent?: string, index?: number): void => {
+		appendJsonl(eventsPath, JSON.stringify(envelopEvent({
+			...envelopeContext,
+			...(agent ? { agent } : {}),
+			...(index !== undefined ? { index } : {}),
+		}, event)));
+	};
 	const controlConfig = config.controlConfig ?? DEFAULT_CONTROL_CONFIG;
 	let activeChildInterrupt: (() => void) | undefined;
 	let interrupted = false;
@@ -898,6 +936,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		|| flatSteps.some((step) => Boolean(step.sessionFile));
 	const statusPayload: RunnerStatusPayload = {
 		runId: id,
+		...(config.parentRunId ? { parentRunId: config.parentRunId } : {}),
+		rootRunId: config.rootRunId ?? id,
 		...(config.sessionId ? { sessionId: config.sessionId } : {}),
 		mode: config.resultMode ?? (flatSteps.length > 1 ? "chain" : "single"),
 		state: "running",
@@ -953,7 +993,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			? controlConfig.notifyChannels.filter((channel) => channel !== "intercom")
 			: controlConfig.notifyChannels;
 		if (channels.length === 0 || !claimControlNotification(controlConfig, event, emittedControlEventKeys, childIntercomTarget)) return;
-		appendJsonl(eventsPath, JSON.stringify({
+		appendRunEvent({
 			type: "subagent.control",
 			event,
 			channels,
@@ -965,7 +1005,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					message: formatControlIntercomMessage(event, childIntercomTarget),
 				},
 			} : {}),
-		}));
+		});
 	};
 	const syncTopLevelCurrentTool = (): void => {
 		const activeStep = statusPayload.steps
@@ -995,6 +1035,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			from: previous,
 			to: "active_long_running",
 			runId: id,
+			parentRunId: config.parentRunId,
+			rootRunId: config.rootRunId ?? id,
 			agent: step.agent,
 			index: flatIndex,
 			ts: now,
@@ -1027,6 +1069,15 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		if (event.type === "tool_execution_start" && event.toolName) {
 			const mutates = isMutatingTool(event.toolName, event.args);
 			const currentPath = resolveCurrentPath(event.toolName, event.args);
+			if (event.toolName === "contact_supervisor") {
+				const reason = typeof event.args?.reason === "string" ? event.args.reason : undefined;
+				const message = typeof event.args?.message === "string" ? event.args.message : undefined;
+				if (reason === "need_decision") {
+					appendRunEvent({ type: QUESTION_ASKED, ts: now, reason, message }, step.agent, flatIndex);
+				} else if (reason === "progress_update") {
+					appendRunEvent({ type: STATUS_CHANGED, ts: now, reason, message }, step.agent, flatIndex);
+				}
+			}
 			step.toolCount = (step.toolCount ?? 0) + 1;
 			step.currentTool = event.toolName;
 			step.currentToolArgs = extractToolArgsPreview(event.args ?? {});
@@ -1049,6 +1100,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			const toolSnapshot = pendingToolResults[flatIndex];
 			pendingToolResults[flatIndex] = undefined;
 			const resultText = extractTextFromContent(event.message.content);
+			if (toolSnapshot?.tool === "contact_supervisor") {
+				appendRunEvent({ type: QUESTION_ANSWERED, ts: now, message: resultText }, step.agent, flatIndex);
+			}
 			appendRecentStepOutput(step, resultText.split("\n").slice(-10));
 			if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
 				const state = mutatingFailureStates[flatIndex]!;
@@ -1067,6 +1121,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						from: previous,
 						to: "needs_attention",
 						runId: id,
+						parentRunId: config.parentRunId,
+						rootRunId: config.rootRunId ?? id,
 						agent: step.agent,
 						index: flatIndex,
 						ts: now,
@@ -1134,6 +1190,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						from: previous,
 						to: "needs_attention",
 						runId: id,
+						parentRunId: config.parentRunId,
+						rootRunId: config.rootRunId ?? id,
 						agent: step.agent,
 						index,
 						ts: now,
@@ -1190,25 +1248,20 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 		}
 		writeAtomicJson(statusPath, statusPayload);
-		appendJsonl(eventsPath, JSON.stringify({
+		appendRunEvent({
 			type: "subagent.run.paused",
 			ts: now,
-			runId: id,
-		}));
+		});
 		activeChildInterrupt?.();
 	};
 	process.on(ASYNC_INTERRUPT_SIGNAL, interruptRunner);
-	appendJsonl(
-		eventsPath,
-		JSON.stringify({
-			type: "subagent.run.started",
-			ts: overallStartTime,
-			runId: id,
-			mode: statusPayload.mode,
-			cwd,
-			pid: process.pid,
-		}),
-	);
+	appendRunEvent({
+		type: "subagent.run.started",
+		ts: overallStartTime,
+		mode: statusPayload.mode,
+		cwd,
+		pid: process.pid,
+	});
 
 	let flatIndex = 0;
 
@@ -1238,6 +1291,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						eventsPath,
 						asyncDir,
 						runId: id,
+						parentRunId: config.parentRunId,
+						rootRunId: config.rootRunId ?? id,
 						stepIndex,
 					});
 					flatIndex += group.parallel.length;
@@ -1264,6 +1319,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						eventsPath,
 						asyncDir,
 						runId: id,
+						parentRunId: config.parentRunId,
+						rootRunId: config.rootRunId ?? id,
 						stepIndex,
 					});
 					flatIndex += group.parallel.length;
@@ -1283,6 +1340,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					eventsPath,
 					asyncDir,
 					runId: id,
+					parentRunId: config.parentRunId,
+					rootRunId: config.rootRunId ?? id,
 					stepIndex,
 				});
 				const parallelResults = await mapConcurrent(
@@ -1301,9 +1360,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							statusPayload.steps[fi].activityState = undefined;
 							statusPayload.lastUpdate = skippedAt;
 							writeAtomicJson(statusPath, statusPayload);
-							appendJsonl(eventsPath, JSON.stringify({
-								type: "subagent.step.failed", ts: skippedAt, runId: id, stepIndex: fi, agent: task.agent, exitCode: -1, durationMs: 0,
-							}));
+							appendRunEvent({
+								type: "subagent.step.failed", ts: skippedAt, stepIndex: fi, exitCode: -1, durationMs: 0,
+							}, task.agent, fi);
 							return { agent: task.agent, output: "(skipped — fail-fast)", exitCode: -1 as number | null, skipped: true };
 						}
 
@@ -1322,9 +1381,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						statusPayload.lastUpdate = taskStartTime;
 						writeAtomicJson(statusPath, statusPayload);
 
-						appendJsonl(eventsPath, JSON.stringify({
-							type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent,
-						}));
+						appendRunEvent({
+							type: "subagent.step.started", ts: taskStartTime, stepIndex: fi,
+						}, task.agent, fi);
 
 						const taskSessionDir = config.sessionDir
 							? path.join(config.sessionDir, `parallel-${taskIdx}`)
@@ -1335,6 +1394,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
 							sessionDir: taskSessionDir,
 							artifactsDir, artifactConfig, id,
+							parentRunId: config.parentRunId,
+							rootRunId: config.rootRunId ?? id,
 							flatIndex: fi, flatStepCount: flatSteps.length,
 							outputFile: path.join(asyncDir, `output-${fi}.log`),
 							piPackageRoot: config.piPackageRoot,
@@ -1366,16 +1427,18 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						statusPayload.lastUpdate = taskEndTime;
 						writeAtomicJson(statusPath, statusPayload);
 
-						appendJsonl(eventsPath, JSON.stringify({
+						appendRunEvent({
 							type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
-							ts: taskEndTime, runId: id, stepIndex: fi, agent: task.agent,
+							ts: taskEndTime, stepIndex: fi,
 							exitCode: singleResult.exitCode, durationMs: taskDuration,
-						}));
+						}, task.agent, fi);
 						if (singleResult.completionGuardTriggered) {
 							const event = buildControlEvent({
 								from: statusPayload.steps[fi].activityState,
 								to: "needs_attention",
 								runId: id,
+								parentRunId: config.parentRunId,
+								rootRunId: config.rootRunId ?? id,
 								agent: task.agent,
 								index: fi,
 								ts: taskEndTime,
@@ -1438,13 +1501,12 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				);
 				previousOutput = appendParallelWorktreeSummary(previousOutput, worktreeSetup, asyncDir, stepIndex, group);
 
-				appendJsonl(eventsPath, JSON.stringify({
+				appendRunEvent({
 					type: "subagent.parallel.completed",
 					ts: Date.now(),
-					runId: id,
 					stepIndex,
 					success: parallelResults.every((r) => r.exitCode === 0 || r.exitCode === -1),
-				}));
+				});
 
 				if (parallelResults.some((r) => r.exitCode !== 0 && r.exitCode !== -1)) {
 					break;
@@ -1468,18 +1530,18 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			statusPayload.outputFile = path.join(asyncDir, `output-${flatIndex}.log`);
 			writeAtomicJson(statusPath, statusPayload);
 
-			appendJsonl(eventsPath, JSON.stringify({
+			appendRunEvent({
 				type: "subagent.step.started",
 				ts: stepStartTime,
-				runId: id,
 				stepIndex: flatIndex,
-				agent: seqStep.agent,
-			}));
+			}, seqStep.agent, flatIndex);
 
 			const singleResult = await runSingleStep(seqStep, {
 				previousOutput, placeholder, cwd, sessionEnabled,
 				sessionDir: config.sessionDir,
 				artifactsDir, artifactConfig, id,
+				parentRunId: config.parentRunId,
+				rootRunId: config.rootRunId ?? id,
 				flatIndex, flatStepCount: flatSteps.length,
 				outputFile: path.join(asyncDir, `output-${flatIndex}.log`),
 				piPackageRoot: config.piPackageRoot,
@@ -1548,21 +1610,21 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			statusPayload.lastUpdate = stepEndTime;
 			writeAtomicJson(statusPath, statusPayload);
 
-			appendJsonl(eventsPath, JSON.stringify({
+			appendRunEvent({
 				type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
 				ts: stepEndTime,
-				runId: id,
 				stepIndex: flatIndex,
-				agent: seqStep.agent,
 				exitCode: singleResult.exitCode,
 				durationMs: stepEndTime - stepStartTime,
 				tokens: stepTokens,
-			}));
+			}, seqStep.agent, flatIndex);
 			if (singleResult.completionGuardTriggered) {
 				const event = buildControlEvent({
 					from: statusPayload.steps[flatIndex].activityState,
 					to: "needs_attention",
 					runId: id,
+					parentRunId: config.parentRunId,
+					rootRunId: config.rootRunId ?? id,
 					agent: seqStep.agent,
 					index: flatIndex,
 					ts: stepEndTime,
@@ -1649,16 +1711,12 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		}
 	}
 	writeAtomicJson(statusPath, statusPayload);
-	appendJsonl(
-		eventsPath,
-		JSON.stringify({
-			type: "subagent.run.completed",
-			ts: runEndedAt,
-			runId: id,
-			status: statusPayload.state,
-			durationMs: runEndedAt - overallStartTime,
-		}),
-	);
+	appendRunEvent({
+		type: "subagent.run.completed",
+		ts: runEndedAt,
+		status: statusPayload.state,
+		durationMs: runEndedAt - overallStartTime,
+	});
 	writeRunLog(logPath, {
 		id,
 		mode: statusPayload.mode,
@@ -1681,6 +1739,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	try {
 		writeAtomicJson(resultPath, {
 			id,
+			parentRunId: config.parentRunId,
+			rootRunId: config.rootRunId ?? id,
 			agent: agentName,
 			mode: resultMode,
 			success: !interrupted && results.every((r) => r.success),

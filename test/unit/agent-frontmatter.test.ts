@@ -104,6 +104,68 @@ Inspect code
 	});
 });
 
+describe("agent frontmatter coordination fields", () => {
+	it("round-trips delegation and coordination metadata through serialize and discover", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-coordination-frontmatter-"));
+		tempDirs.push(dir);
+		const agentsDir = path.join(dir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		const agent: AgentConfig = {
+			name: "planner",
+			description: "Planner",
+			systemPrompt: "Plan work",
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
+			inheritSkills: false,
+			source: "project",
+			filePath: path.join(agentsDir, "planner.md"),
+			canDelegate: true,
+			allowedChildAgents: ["scout", "worker"],
+			maxChildren: 3,
+			maxParallelChildren: 2,
+			budgetTokens: 1000,
+			budgetDollars: 0.5,
+			capabilities: ["planning", "coordination"],
+			coordinationModes: ["blackboard", "auction"],
+			allowedCoordinationActions: ["post_task", "claim", "record_decision"],
+		};
+		fs.writeFileSync(agent.filePath, serializeAgent(agent), "utf-8");
+
+		const parsed = discoverAgents(dir, "project").agents.find((candidate) => candidate.name === "planner");
+		assert.ok(parsed);
+		assert.equal(parsed.canDelegate, true);
+		assert.deepEqual(parsed.allowedChildAgents, ["scout", "worker"]);
+		assert.equal(parsed.maxChildren, 3);
+		assert.equal(parsed.maxParallelChildren, 2);
+		assert.equal(parsed.budgetTokens, 1000);
+		assert.equal(parsed.budgetDollars, 0.5);
+		assert.deepEqual(parsed.capabilities, ["planning", "coordination"]);
+		assert.deepEqual(parsed.coordinationModes, ["blackboard", "auction"]);
+		assert.deepEqual(parsed.allowedCoordinationActions, ["post_task", "claim", "record_decision"]);
+	});
+
+	it("rejects unsupported coordination frontmatter values with a clear error", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-invalid-coordination-frontmatter-"));
+		tempDirs.push(dir);
+		const agentsDir = path.join(dir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(path.join(agentsDir, "planner.md"), `---
+name: planner
+description: Planner
+coordinationModes: blackboard, teleport
+allowedCoordinationActions: post_task
+---
+
+Plan work
+`, "utf-8");
+
+		assert.throws(
+			() => discoverAgents(dir, "project"),
+			/coordinationModes .* unsupported value 'teleport'.*Allowed values: blackboard, auction, vote, debate/,
+		);
+	});
+});
+
 describe("agent frontmatter fallbackModels", () => {
 	it("serializes fallbackModels into agent frontmatter", () => {
 		const agent: AgentConfig = {

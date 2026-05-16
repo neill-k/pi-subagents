@@ -25,10 +25,15 @@
   "bin": {
     "pi-subagents": "install.mjs"
   },
+  "exports": {
+    "./event-types": "./src/coordination/event-types.ts",
+    "./package.json": "./package.json"
+  },
   "files": [
     "src/**/*.ts",
     "*.mjs",
     "agents/",
+    "docs/",
     "skills/**/*",
     "prompts/**/*",
     "README.md",

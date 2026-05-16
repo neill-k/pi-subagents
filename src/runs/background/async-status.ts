@@ -34,6 +34,8 @@ export interface AsyncRunSummary {
 	id: string;
 	asyncDir: string;
 	sessionId?: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	state: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
 	lastActivityAt?: number;
@@ -124,6 +126,8 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		id: status.runId || path.basename(asyncDir),
 		asyncDir,
 		...(status.sessionId ? { sessionId: status.sessionId } : {}),
+		...(status.parentRunId ? { parentRunId: status.parentRunId } : {}),
+		rootRunId: status.rootRunId ?? status.runId ?? path.basename(asyncDir),
 		state: status.state,
 		activityState,
 		lastActivityAt,

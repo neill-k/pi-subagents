@@ -20,6 +20,18 @@ export type AgentSource = "builtin" | "user" | "project";
 type SystemPromptMode = "append" | "replace";
 export type AgentDefaultContext = "fresh" | "fork";
 
+export const COORDINATION_MODES = ["blackboard", "auction", "vote", "debate"] as const;
+export const ALLOWED_COORDINATION_ACTIONS = [
+	"ask_supervisor",
+	"publish_artifact",
+	"record_finding",
+	"record_decision",
+	"post_task",
+	"claim",
+	"submit_bid",
+	"score",
+] as const;
+
 export function defaultSystemPromptMode(name: string): SystemPromptMode {
 	return name === "delegate" ? "append" : "replace";
 }
@@ -91,6 +103,15 @@ export interface AgentConfig {
 	defaultProgress?: boolean;
 	interactive?: boolean;
 	maxSubagentDepth?: number;
+	canDelegate?: boolean;
+	allowedChildAgents?: string[];
+	maxChildren?: number;
+	maxParallelChildren?: number;
+	budgetTokens?: number;
+	budgetDollars?: number;
+	capabilities?: string[];
+	coordinationModes?: string[];
+	allowedCoordinationActions?: string[];
 	disabled?: boolean;
 	extraFields?: Record<string, string>;
 	override?: BuiltinAgentOverrideInfo;
@@ -166,6 +187,48 @@ function arraysEqual(a: string[] | undefined, b: string[] | undefined): boolean 
 		if (a[i] !== b[i]) return false;
 	}
 	return true;
+}
+
+function parseCsvList(value: string | undefined): string[] | undefined {
+	const parsed = value
+		?.split(",")
+		.map((entry) => entry.trim())
+		.filter(Boolean);
+	return parsed && parsed.length > 0 ? parsed : undefined;
+}
+
+function parseRestrictedCsvList(
+	value: string | undefined,
+	allowed: readonly string[],
+	label: string,
+	filePath: string,
+): string[] | undefined {
+	const parsed = parseCsvList(value);
+	if (!parsed) return undefined;
+	const allowedValues = new Set(allowed);
+	const invalid = parsed.filter((entry) => !allowedValues.has(entry));
+	if (invalid.length > 0) {
+		throw new Error(`${label} in '${filePath}' contains unsupported value '${invalid[0]}'. Allowed values: ${allowed.join(", ")}.`);
+	}
+	return parsed;
+}
+
+function parseBooleanField(value: string | undefined): boolean | undefined {
+	if (value === "true") return true;
+	if (value === "false") return false;
+	return undefined;
+}
+
+function parseIntegerField(value: string | undefined): number | undefined {
+	if (value === undefined) return undefined;
+	const parsed = Number(value);
+	return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function parseNumberField(value: string | undefined): number | undefined {
+	if (value === undefined) return undefined;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
@@ -564,10 +627,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 		const packageName = parsedPackage.packageName;
 		const runtimeName = buildRuntimeName(localName, packageName);
 
-		const rawTools = frontmatter.tools
-			?.split(",")
-			.map((t) => t.trim())
-			.filter(Boolean);
+		const rawTools = parseCsvList(frontmatter.tools);
 
 		const mcpDirectTools: string[] = [];
 		const tools: string[] = [];
@@ -581,20 +641,11 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			}
 		}
 
-		const defaultReads = frontmatter.defaultReads
-			?.split(",")
-			.map((f) => f.trim())
-			.filter(Boolean);
+		const defaultReads = parseCsvList(frontmatter.defaultReads);
 
 		const skillStr = frontmatter.skill || frontmatter.skills;
-		const skills = skillStr
-			?.split(",")
-			.map((s) => s.trim())
-			.filter(Boolean);
-		const fallbackModels = frontmatter.fallbackModels
-			?.split(",")
-			.map((model) => model.trim())
-			.filter(Boolean);
+		const skills = parseCsvList(skillStr);
+		const fallbackModels = parseCsvList(frontmatter.fallbackModels);
 		const systemPromptMode = frontmatter.systemPromptMode === "replace"
 			? "replace"
 			: frontmatter.systemPromptMode === "append"
@@ -618,11 +669,18 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 
 		let extensions: string[] | undefined;
 		if (frontmatter.extensions !== undefined) {
-			extensions = frontmatter.extensions
-				.split(",")
-				.map((e) => e.trim())
-				.filter(Boolean);
+			extensions = parseCsvList(frontmatter.extensions) ?? [];
 		}
+
+		const canDelegate = parseBooleanField(frontmatter.canDelegate) ?? (localName === "delegate" ? true : false);
+		const allowedChildAgents = parseCsvList(frontmatter.allowedChildAgents);
+		const maxChildren = parseIntegerField(frontmatter.maxChildren);
+		const maxParallelChildren = parseIntegerField(frontmatter.maxParallelChildren);
+		const budgetTokens = parseIntegerField(frontmatter.budgetTokens);
+		const budgetDollars = parseNumberField(frontmatter.budgetDollars);
+		const capabilities = parseCsvList(frontmatter.capabilities);
+		const coordinationModes = parseRestrictedCsvList(frontmatter.coordinationModes, COORDINATION_MODES, "coordinationModes", filePath);
+		const allowedCoordinationActions = parseRestrictedCsvList(frontmatter.allowedCoordinationActions, ALLOWED_COORDINATION_ACTIONS, "allowedCoordinationActions", filePath);
 
 		const extraFields: Record<string, string> = {};
 		for (const [key, value] of Object.entries(frontmatter)) {
@@ -658,6 +716,15 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 				Number.isInteger(parsedMaxSubagentDepth) && parsedMaxSubagentDepth >= 0
 					? parsedMaxSubagentDepth
 					: undefined,
+			canDelegate,
+			allowedChildAgents,
+			maxChildren,
+			maxParallelChildren,
+			budgetTokens,
+			budgetDollars,
+			capabilities,
+			coordinationModes,
+			allowedCoordinationActions,
 			extraFields: Object.keys(extraFields).length > 0 ? extraFields : undefined,
 		});
 	}

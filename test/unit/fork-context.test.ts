@@ -212,6 +212,29 @@ describe("createForkContextResolver", () => {
 		}
 	});
 
+	it("materializes forked sessions that the Pi session manager defers until first persist", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-fork-deferred-"));
+		try {
+			const parentSessionFile = path.join(tempDir, "parent.jsonl");
+			const childSessionFile = path.join(tempDir, "deferred-child.jsonl");
+			writeMinimalSessionFile(parentSessionFile, "parent");
+			const resolver = createForkContextResolver({
+				getSessionFile: () => parentSessionFile,
+				getLeafId: () => "leaf-abc",
+			}, "fork", {
+				openSession: () => ({
+					createBranchedSession: () => childSessionFile,
+					_rewriteFile: () => writeMinimalSessionFile(childSessionFile, "deferred-child"),
+				}),
+			});
+
+			assert.equal(resolver.sessionFileForIndex(0), childSessionFile);
+			assert.equal(fs.existsSync(childSessionFile), true);
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	it("fails clearly when branch extraction returns a missing child file", () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-fork-missing-child-"));
 		try {

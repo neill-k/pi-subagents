@@ -21,6 +21,15 @@ export const KNOWN_FIELDS = new Set([
 	"defaultProgress",
 	"interactive",
 	"maxSubagentDepth",
+	"canDelegate",
+	"allowedChildAgents",
+	"maxChildren",
+	"maxParallelChildren",
+	"budgetTokens",
+	"budgetDollars",
+	"capabilities",
+	"coordinationModes",
+	"allowedCoordinationActions",
 ]);
 
 function joinComma(values: string[] | undefined): string | undefined {
@@ -69,6 +78,24 @@ export function serializeAgent(config: AgentConfig): string {
 	if (Number.isInteger(config.maxSubagentDepth) && config.maxSubagentDepth >= 0) {
 		lines.push(`maxSubagentDepth: ${config.maxSubagentDepth}`);
 	}
+	const delegateDefault = (config.localName ?? config.name) === "delegate";
+	if (config.canDelegate !== undefined && config.canDelegate !== delegateDefault) {
+		lines.push(`canDelegate: ${config.canDelegate ? "true" : "false"}`);
+	}
+	const allowedChildAgents = joinComma(config.allowedChildAgents);
+	if (allowedChildAgents) lines.push(`allowedChildAgents: ${allowedChildAgents}`);
+	if (Number.isInteger(config.maxChildren) && config.maxChildren >= 0) lines.push(`maxChildren: ${config.maxChildren}`);
+	if (Number.isInteger(config.maxParallelChildren) && config.maxParallelChildren >= 0) lines.push(`maxParallelChildren: ${config.maxParallelChildren}`);
+	if (Number.isInteger(config.budgetTokens) && config.budgetTokens >= 0) lines.push(`budgetTokens: ${config.budgetTokens}`);
+	if (typeof config.budgetDollars === "number" && Number.isFinite(config.budgetDollars) && config.budgetDollars >= 0) {
+		lines.push(`budgetDollars: ${config.budgetDollars}`);
+	}
+	const capabilities = joinComma(config.capabilities);
+	if (capabilities) lines.push(`capabilities: ${capabilities}`);
+	const coordinationModes = joinComma(config.coordinationModes);
+	if (coordinationModes) lines.push(`coordinationModes: ${coordinationModes}`);
+	const allowedCoordinationActions = joinComma(config.allowedCoordinationActions);
+	if (allowedCoordinationActions) lines.push(`allowedCoordinationActions: ${allowedCoordinationActions}`);
 
 	if (config.extraFields) {
 		for (const [key, value] of Object.entries(config.extraFields)) {

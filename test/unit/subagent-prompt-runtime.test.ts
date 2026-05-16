@@ -67,14 +67,14 @@ describe("subagent prompt runtime", () => {
 		assert.ok(rewritten.includes("Current working directory: /repo"));
 	});
 
-	it("injects a child-only boundary that forbids proposing or running subagents", () => {
+	it("injects a child-only boundary with policy-gated coordination guidance", () => {
 		const rewritten = rewriteSubagentPrompt(BASE_PROMPT, {
 			inheritProjectContext: true,
 			inheritSkills: true,
 		});
 
 		assert.ok(rewritten.startsWith(CHILD_SUBAGENT_BOUNDARY_INSTRUCTIONS));
-		assert.ok(rewritten.includes("Do not propose or run subagents."));
+		assert.ok(rewritten.includes("Only call subagent for policy-gated coordination or delegation"));
 		assert.ok(rewritten.includes("If you need to edit files, call the actual edit/write tools."));
 		assert.ok(rewritten.includes("Do not print tool-call syntax, patches, or pseudo-tool calls as text."));
 		assert.equal(rewriteSubagentPrompt(rewritten, { inheritProjectContext: true, inheritSkills: true }).indexOf(CHILD_SUBAGENT_BOUNDARY_INSTRUCTIONS), 0);

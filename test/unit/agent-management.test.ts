@@ -142,4 +142,51 @@ Inspect
 		assert.match(content, /inheritProjectContext: true/);
 		assert.match(content, /inheritSkills: false/);
 	});
+
+	it("creates and reads coordination frontmatter fields", () => {
+		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
+		const result = handleCreate(
+			{
+				config: {
+					name: "planner",
+					description: "Planner",
+					scope: "project",
+					canDelegate: true,
+					allowedChildAgents: ["scout", "worker"],
+					maxChildren: 4,
+					maxParallelChildren: 2,
+					budgetTokens: 1200,
+					budgetDollars: 0.25,
+					capabilities: "planning, coordination",
+					coordinationModes: "blackboard, auction",
+					allowedCoordinationActions: "post_task, claim, record_decision",
+				},
+			},
+			ctx,
+		);
+
+		assert.equal(result.isError, false);
+		const content = fs.readFileSync(path.join(tempDir, ".pi", "agents", "planner.md"), "utf-8");
+		assert.match(content, /^canDelegate: true$/m);
+		assert.match(content, /^allowedChildAgents: scout, worker$/m);
+		assert.match(content, /^budgetDollars: 0.25$/m);
+		assert.match(content, /^coordinationModes: blackboard, auction$/m);
+
+		const got = handleManagementAction("get", { agent: "planner" }, ctx);
+		const text = readText(got);
+		assert.match(text, /Can delegate: true/);
+		assert.match(text, /Allowed child agents: scout, worker/);
+		assert.match(text, /Budget tokens: 1200/);
+		assert.match(text, /Allowed coordination actions: post_task, claim, record_decision/);
+	});
+
+	it("rejects unsupported coordination config values", () => {
+		const result = handleCreate(
+			{ config: { name: "planner", description: "Planner", scope: "project", coordinationModes: "blackboard, teleport" } },
+			{ cwd: tempDir, modelRegistry: { getAvailable: () => [] } },
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(readText(result), /config\.coordinationModes contains unsupported value 'teleport'/);
+	});
 });

@@ -10,9 +10,11 @@ import {
 	type SubagentState,
 	POLL_INTERVAL_MS,
 	RESULTS_DIR,
+	SUBAGENT_COORDINATION_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 } from "../../shared/types.ts";
+import { COORDINATION_EVENT_TYPES } from "../../coordination/event-types.ts";
 import { readStatus } from "../../shared/utils.ts";
 import { normalizeParallelGroups } from "./parallel-groups.ts";
 import { reconcileAsyncRun } from "./stale-run-reconciler.ts";
@@ -78,7 +80,12 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 					console.error(`Ignoring malformed async control event in '${eventsPath}':`, error);
 					continue;
 				}
-				if (!parsed || typeof parsed !== "object" || (parsed as { type?: unknown }).type !== "subagent.control") continue;
+				if (!parsed || typeof parsed !== "object") continue;
+				const eventType = (parsed as { type?: unknown }).type;
+				if (typeof eventType === "string" && (COORDINATION_EVENT_TYPES as readonly string[]).includes(eventType)) {
+					pi.events.emit(SUBAGENT_COORDINATION_EVENT, parsed);
+				}
+				if (eventType !== "subagent.control") continue;
 				const record = parsed as { event?: ControlEvent; channels?: string[]; childIntercomTarget?: string; noticeText?: string; intercom?: { to?: string; message?: string } };
 				if (!record.event || !Array.isArray(record.channels)) continue;
 				const payload = {
@@ -142,6 +149,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						const previousStatus = job.status;
 						job.status = status.state;
 						job.sessionId = status.sessionId ?? job.sessionId;
+						job.parentRunId = status.parentRunId ?? job.parentRunId;
+						job.rootRunId = status.rootRunId ?? job.rootRunId;
 						job.activityState = status.activityState;
 						job.lastActivityAt = status.lastActivityAt ?? job.lastActivityAt;
 						job.currentTool = status.currentTool;
@@ -215,6 +224,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			asyncDir,
 			status: "queued",
 			pid: typeof info.pid === "number" ? info.pid : undefined,
+			...(typeof info.parentRunId === "string" ? { parentRunId: info.parentRunId } : {}),
+			...(typeof info.rootRunId === "string" ? { rootRunId: info.rootRunId } : {}),
 			...(typeof info.sessionId === "string" ? { sessionId: info.sessionId } : {}),
 			mode: info.mode ?? (info.chain ? "chain" : "single"),
 			agents,

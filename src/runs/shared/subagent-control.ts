@@ -88,6 +88,8 @@ export function buildControlEvent(input: {
 	from?: ActivityState;
 	to: ActivityState;
 	runId: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	agent: string;
 	index?: number;
 	ts?: number;
@@ -118,6 +120,8 @@ export function buildControlEvent(input: {
 		to: input.to,
 		ts,
 		runId: input.runId,
+		...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
+		...(input.rootRunId ? { rootRunId: input.rootRunId } : {}),
 		agent: input.agent,
 		...(input.index !== undefined ? { index: input.index } : {}),
 		message,

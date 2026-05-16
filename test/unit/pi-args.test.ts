@@ -160,6 +160,25 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		assert.equal(env.PI_SUBAGENT_RUN_ID, "78f659a3");
 		assert.equal(env.PI_SUBAGENT_CHILD_AGENT, "worker");
 		assert.equal(env.PI_SUBAGENT_CHILD_INDEX, "2");
+		assert.equal(env.PI_SUBAGENT_ROOT_RUN_ID, "78f659a3");
+	});
+
+	it("threads parent and root run identity through child env", () => {
+		const { env } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: true,
+			inheritSkills: true,
+			runId: "child",
+			parentRunId: "parent",
+			rootRunId: "root",
+			childAgentName: "worker",
+		});
+
+		assert.equal(env.PI_SUBAGENT_RUN_ID, "child");
+		assert.equal(env.PI_SUBAGENT_PARENT_RUN_ID, "parent");
+		assert.equal(env.PI_SUBAGENT_ROOT_RUN_ID, "root");
 	});
 
 	it("emits explicit builtin tool allowlists", () => {

@@ -143,7 +143,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		const actionSchema = SubagentParams?.properties?.action;
 		assert.ok(actionSchema, "action schema should exist");
 		assert.equal(actionSchema.type, "string");
-		assert.deepEqual(actionSchema.enum, ["list", "get", "create", "update", "delete", "status", "interrupt", "resume", "doctor"]);
+		assert.deepEqual(actionSchema.enum, ["list", "get", "create", "update", "delete", "status", "interrupt", "resume", "tree", "events", "coordination", "doctor"]);
 		const description = String(actionSchema.description ?? "");
 		assert.match(description, /Management\/control action/);
 		assert.match(description, /Omit for execution mode/);

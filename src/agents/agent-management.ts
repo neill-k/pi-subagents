@@ -15,6 +15,8 @@ import {
 	buildRuntimeName,
 	frontmatterNameForConfig,
 	parsePackageName,
+	ALLOWED_COORDINATION_ACTIONS,
+	COORDINATION_MODES,
 } from "./agents.ts";
 import { serializeAgent } from "./agent-serializer.ts";
 import { serializeChain } from "./chain-serializer.ts";
@@ -213,6 +215,40 @@ function parseTools(raw: string): { tools?: string[]; mcpDirectTools?: string[] 
 	return { tools: tools.length ? tools : undefined, mcpDirectTools: mcpDirectTools.length ? mcpDirectTools : undefined };
 }
 
+function applyStringListConfig(
+	target: AgentConfig,
+	cfg: Record<string, unknown>,
+	key: keyof Pick<AgentConfig, "allowedChildAgents" | "capabilities" | "coordinationModes" | "allowedCoordinationActions">,
+	label: string,
+	allowed?: readonly string[],
+): string | undefined {
+	if (!hasKey(cfg, key)) return undefined;
+	const value = cfg[key as string];
+	const applyParsed = (parsed: string[]): string | undefined => {
+		if (allowed) {
+			const allowedValues = new Set(allowed);
+			const invalid = parsed.filter((entry) => !allowedValues.has(entry));
+			if (invalid.length > 0) {
+				return `config.${label} contains unsupported value '${invalid[0]}'. Allowed values: ${allowed.join(", ")}.`;
+			}
+		}
+		target[key] = parsed.length ? [...new Set(parsed)] : undefined;
+		return undefined;
+	};
+	if (value === false || value === "") {
+		target[key] = undefined;
+		return undefined;
+	}
+	if (typeof value === "string") {
+		return applyParsed(parseCsv(value));
+	}
+	if (Array.isArray(value)) {
+		const parsed = value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean);
+		return applyParsed(parsed);
+	}
+	return `config.${label} must be a comma-separated string, string array, or false when provided.`;
+}
+
 function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): string | undefined {
 	if (hasKey(cfg, "systemPrompt")) {
 		if (cfg.systemPrompt === false || cfg.systemPrompt === "") target.systemPrompt = "";
@@ -297,6 +333,36 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 			target.maxSubagentDepth = cfg.maxSubagentDepth;
 		} else return "config.maxSubagentDepth must be an integer >= 0 or false when provided.";
 	}
+	if (hasKey(cfg, "canDelegate")) {
+		if (cfg.canDelegate === false || cfg.canDelegate === "") target.canDelegate = undefined;
+		else if (typeof cfg.canDelegate === "boolean") target.canDelegate = cfg.canDelegate;
+		else return "config.canDelegate must be a boolean or false when provided.";
+	}
+	const allowedChildAgentsError = applyStringListConfig(target, cfg, "allowedChildAgents", "allowedChildAgents");
+	if (allowedChildAgentsError) return allowedChildAgentsError;
+	for (const key of ["maxChildren", "maxParallelChildren", "budgetTokens"] as const) {
+		if (!hasKey(cfg, key)) continue;
+		const value = cfg[key];
+		if (value === false || value === "") {
+			target[key] = undefined;
+		} else if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+			target[key] = value;
+		} else {
+			return `config.${key} must be an integer >= 0 or false when provided.`;
+		}
+	}
+	if (hasKey(cfg, "budgetDollars")) {
+		if (cfg.budgetDollars === false || cfg.budgetDollars === "") target.budgetDollars = undefined;
+		else if (typeof cfg.budgetDollars === "number" && Number.isFinite(cfg.budgetDollars) && cfg.budgetDollars >= 0) {
+			target.budgetDollars = cfg.budgetDollars;
+		} else return "config.budgetDollars must be a number >= 0 or false when provided.";
+	}
+	const capabilitiesError = applyStringListConfig(target, cfg, "capabilities", "capabilities");
+	if (capabilitiesError) return capabilitiesError;
+	const coordinationModesError = applyStringListConfig(target, cfg, "coordinationModes", "coordinationModes", COORDINATION_MODES);
+	if (coordinationModesError) return coordinationModesError;
+	const allowedCoordinationActionsError = applyStringListConfig(target, cfg, "allowedCoordinationActions", "allowedCoordinationActions", ALLOWED_COORDINATION_ACTIONS);
+	if (allowedCoordinationActionsError) return allowedCoordinationActionsError;
 	return undefined;
 }
 
@@ -366,6 +432,15 @@ function formatAgentDetail(agent: AgentConfig): string {
 	if (agent.defaultReads?.length) lines.push(`Reads: ${agent.defaultReads.join(", ")}`);
 	if (agent.defaultProgress) lines.push("Progress: true");
 	if (agent.maxSubagentDepth !== undefined) lines.push(`Max subagent depth: ${agent.maxSubagentDepth}`);
+	if (agent.canDelegate !== undefined) lines.push(`Can delegate: ${agent.canDelegate ? "true" : "false"}`);
+	if (agent.allowedChildAgents?.length) lines.push(`Allowed child agents: ${agent.allowedChildAgents.join(", ")}`);
+	if (agent.maxChildren !== undefined) lines.push(`Max children: ${agent.maxChildren}`);
+	if (agent.maxParallelChildren !== undefined) lines.push(`Max parallel children: ${agent.maxParallelChildren}`);
+	if (agent.budgetTokens !== undefined) lines.push(`Budget tokens: ${agent.budgetTokens}`);
+	if (agent.budgetDollars !== undefined) lines.push(`Budget dollars: ${agent.budgetDollars}`);
+	if (agent.capabilities?.length) lines.push(`Capabilities: ${agent.capabilities.join(", ")}`);
+	if (agent.coordinationModes?.length) lines.push(`Coordination modes: ${agent.coordinationModes.join(", ")}`);
+	if (agent.allowedCoordinationActions?.length) lines.push(`Allowed coordination actions: ${agent.allowedCoordinationActions.join(", ")}`);
 	if (agent.systemPrompt.trim()) lines.push("", "System Prompt:", agent.systemPrompt);
 	return lines.join("\n");
 }

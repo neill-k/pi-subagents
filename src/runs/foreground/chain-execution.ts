@@ -84,6 +84,8 @@ interface ParallelChainRunInput {
 	intercomEvents?: IntercomEventBus;
 	cwd?: string;
 	runId: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	globalTaskIndex: number;
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex?: (idx?: number) => string | undefined;
@@ -231,6 +233,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				allowIntercomDetach: taskAgentConfig?.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
 				intercomEvents: input.intercomEvents,
 				runId: input.runId,
+				parentRunId: input.parentRunId,
+				rootRunId: input.rootRunId,
 				index: input.globalTaskIndex + taskIndex,
 				sessionDir: input.sessionDirForIndex(input.globalTaskIndex + taskIndex),
 				sessionFile: input.sessionFileForIndex?.(input.globalTaskIndex + taskIndex),
@@ -305,6 +309,8 @@ interface ChainExecutionParams {
 	intercomEvents?: IntercomEventBus;
 	signal?: AbortSignal;
 	runId: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	cwd?: string;
 	shareEnabled: boolean;
 	sessionDirForIndex: (idx?: number) => string | undefined;
@@ -356,6 +362,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		ctx,
 		signal,
 		runId,
+		parentRunId,
+		rootRunId,
 		cwd,
 		shareEnabled,
 		sessionDirForIndex,
@@ -574,6 +582,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					intercomEvents,
 					cwd,
 					runId,
+					parentRunId,
+					rootRunId,
 					globalTaskIndex,
 					sessionDirForIndex,
 					sessionFileForIndex,
@@ -780,6 +790,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				allowIntercomDetach: agentConfig.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
 				intercomEvents,
 				runId,
+				parentRunId,
+				rootRunId,
 				index: globalTaskIndex,
 				sessionDir: sessionDirForIndex(globalTaskIndex),
 				sessionFile: sessionFileForIndex?.(globalTaskIndex),

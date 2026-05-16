@@ -7,11 +7,16 @@ interface ForkableSessionManager {
 	getSessionFile(): string | undefined;
 	getLeafId(): string | null;
 	getSessionDir?(): string;
-	openSession?: (path: string, sessionDir?: string) => { createBranchedSession(leafId: string): string | undefined };
+	openSession?: (path: string, sessionDir?: string) => BranchingSessionManager;
+}
+
+interface BranchingSessionManager {
+	createBranchedSession(leafId: string): string | undefined;
+	_rewriteFile?: () => void;
 }
 
 interface ForkContextResolverOptions {
-	openSession?: (path: string, sessionDir?: string) => { createBranchedSession(leafId: string): string | undefined };
+	openSession?: (path: string, sessionDir?: string) => BranchingSessionManager;
 }
 
 interface ForkContextResolver {
@@ -61,6 +66,9 @@ export function createForkContextResolver(
 				const sessionFile = sourceManager.createBranchedSession(leafId);
 				if (!sessionFile) {
 					throw new Error("Session manager did not return a forked session file.");
+				}
+				if (!fs.existsSync(sessionFile)) {
+					sourceManager._rewriteFile?.();
 				}
 				if (!fs.existsSync(sessionFile)) {
 					throw new Error(`Session manager returned a forked session file that does not exist: ${sessionFile}`);

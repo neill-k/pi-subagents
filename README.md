@@ -151,6 +151,8 @@ Background runs keep working after control returns to you. Inspect active runs w
 
 They also show a compact async widget and send completion notifications. Parallel background runs show per-agent progress instead of fake chain steps. Chains with parallel groups keep their grouped shape in progress and results, so failed or paused agents stay visible next to completed ones.
 
+For orchestration tooling, background runs also write a root-run event stream. Use `subagent({ action: "tree", id: "..." })` to inspect the run graph and `subagent({ action: "events", id: "...", type: "subagent.step.*" })` to read JSONL events. `subagent({ action: "coordination", coord: { op: "...", rootRunId: "..." } })` provides run-local blackboard, task, decision, artifact, auction, bid, and score primitives. Downstream packages can subscribe to `SUBAGENT_COORDINATION_EVENT` or import event constants from `pi-subagents/event-types`.
+
 You can also ask naturally:
 
 ```text

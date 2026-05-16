@@ -220,11 +220,11 @@ class SubagentControlNoticeComponent implements Component {
 }
 
 export default function registerSubagentExtension(pi: ExtensionAPI): void {
-	if (process.env[SUBAGENT_CHILD_ENV] === "1") return;
+	const childMode = process.env[SUBAGENT_CHILD_ENV] === "1";
 	const globalStore = globalThis as Record<string, unknown>;
 	const runtimeCleanupStoreKey = "__piSubagentRuntimeCleanup";
 	const previousRuntimeCleanup = globalStore[runtimeCleanupStoreKey];
-	if (typeof previousRuntimeCleanup === "function") {
+	if (!childMode && typeof previousRuntimeCleanup === "function") {
 		try {
 			previousRuntimeCleanup();
 		} catch {
@@ -261,26 +261,33 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		},
 	};
 
-	const { startResultWatcher, primeExistingResults, stopResultWatcher } = createResultWatcher(
-		pi,
-		state,
-		RESULTS_DIR,
-		10 * 60 * 1000,
-	);
-	startResultWatcher();
-	primeExistingResults();
+	let primeExistingResults = () => {};
+	let stopResultWatcher = () => {};
+	let runtimeCleanup = () => {};
+	if (!childMode) {
+		const watcher = createResultWatcher(
+			pi,
+			state,
+			RESULTS_DIR,
+			10 * 60 * 1000,
+		);
+		watcher.startResultWatcher();
+		watcher.primeExistingResults();
+		primeExistingResults = watcher.primeExistingResults;
+		stopResultWatcher = watcher.stopResultWatcher;
 
-	const runtimeCleanup = () => {
-		stopWidgetAnimation();
-		stopResultAnimations();
-		stopResultWatcher();
-		clearPendingForegroundControlNotices(state);
-		if (state.poller) {
-			clearInterval(state.poller);
-			state.poller = null;
-		}
-	};
-	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
+		runtimeCleanup = () => {
+			stopWidgetAnimation();
+			stopResultAnimations();
+			stopResultWatcher();
+			clearPendingForegroundControlNotices(state);
+			if (state.poller) {
+				clearInterval(state.poller);
+				state.poller = null;
+			}
+		};
+		globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
+	}
 
 	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(pi, state, ASYNC_DIR);
 	const executor = createSubagentExecutor({
@@ -294,73 +301,95 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		discoverAgents,
 	});
 
-	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
-		const details = resolveSlashMessageDetails(message.details);
-		if (!details) return undefined;
-		return createSlashResultComponent(details, options, theme, () => state.lastUiContext?.ui.requestRender?.());
-	});
+	if (!childMode) {
+		pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
+			const details = resolveSlashMessageDetails(message.details);
+			if (!details) return undefined;
+			return createSlashResultComponent(details, options, theme, () => state.lastUiContext?.ui.requestRender?.());
+		});
 
-	pi.registerMessageRenderer<SubagentNotifyDetails>("subagent-notify", (message, options, theme) => {
-		const content = typeof message.content === "string" ? message.content : "";
-		const details = (message.details as SubagentNotifyDetails | undefined) ?? parseSubagentNotifyContent(content);
-		if (!details) return new Text(content, 0, 0);
-		const icon = details.status === "completed"
-			? theme.fg("success", "✓")
-			: details.status === "paused"
-				? theme.fg("warning", "■")
-				: theme.fg("error", "✗");
-		const parts: string[] = [];
-		if (details.taskInfo) parts.push(details.taskInfo);
-		if (details.durationMs !== undefined) parts.push(formatDuration(details.durationMs));
-		let text = `${icon} ${theme.bold(details.agent)} ${theme.fg("dim", details.status)}`;
-		if (parts.length > 0) text += ` ${theme.fg("dim", "·")} ${parts.map((part) => theme.fg("dim", part)).join(` ${theme.fg("dim", "·")} `)}`;
-		const trimmedPreview = details.resultPreview.trim();
-		const previewLines = options.expanded
-			? trimmedPreview.split("\n").filter((line) => line.trim())
-			: [trimmedPreview.split("\n", 1)[0] ?? ""].filter((line) => line.trim());
-		for (const line of previewLines.length > 0 ? previewLines : ["(no output)"]) {
-			text += `\n  ${theme.fg("dim", `⎿  ${line}`)}`;
-		}
-		if (!options.expanded && trimmedPreview.includes("\n")) {
-			text += `\n  ${theme.fg("dim", "Ctrl+O full notification")}`;
-		}
-		if (details.sessionLabel && details.sessionValue) {
-			text += `\n  ${theme.fg("muted", `${details.sessionLabel}: ${shortenPath(details.sessionValue)}`)}`;
-		}
-		return new Text(text, 0, 0);
-	});
+		pi.registerMessageRenderer<SubagentNotifyDetails>("subagent-notify", (message, options, theme) => {
+			const content = typeof message.content === "string" ? message.content : "";
+			const details = (message.details as SubagentNotifyDetails | undefined) ?? parseSubagentNotifyContent(content);
+			if (!details) return new Text(content, 0, 0);
+			const icon = details.status === "completed"
+				? theme.fg("success", "✓")
+				: details.status === "paused"
+					? theme.fg("warning", "■")
+					: theme.fg("error", "✗");
+			const parts: string[] = [];
+			if (details.taskInfo) parts.push(details.taskInfo);
+			if (details.durationMs !== undefined) parts.push(formatDuration(details.durationMs));
+			let text = `${icon} ${theme.bold(details.agent)} ${theme.fg("dim", details.status)}`;
+			if (parts.length > 0) text += ` ${theme.fg("dim", "·")} ${parts.map((part) => theme.fg("dim", part)).join(` ${theme.fg("dim", "·")} `)}`;
+			const trimmedPreview = details.resultPreview.trim();
+			const previewLines = options.expanded
+				? trimmedPreview.split("\n").filter((line) => line.trim())
+				: [trimmedPreview.split("\n", 1)[0] ?? ""].filter((line) => line.trim());
+			for (const line of previewLines.length > 0 ? previewLines : ["(no output)"]) {
+				text += `\n  ${theme.fg("dim", `⎿  ${line}`)}`;
+			}
+			if (!options.expanded && trimmedPreview.includes("\n")) {
+				text += `\n  ${theme.fg("dim", "Ctrl+O full notification")}`;
+			}
+			if (details.sessionLabel && details.sessionValue) {
+				text += `\n  ${theme.fg("muted", `${details.sessionLabel}: ${shortenPath(details.sessionValue)}`)}`;
+			}
+			return new Text(text, 0, 0);
+		});
 
-	pi.registerMessageRenderer<SubagentControlMessageDetails>(SUBAGENT_CONTROL_MESSAGE_TYPE, (message, _options, theme) => {
-		const details = message.details as SubagentControlMessageDetails | undefined;
-		if (!details?.event) return undefined;
-		const content = typeof message.content === "string" ? message.content : undefined;
-		return new SubagentControlNoticeComponent({ ...details, noticeText: formatSubagentControlNotice(details, content) }, theme);
-	});
+		pi.registerMessageRenderer<SubagentControlMessageDetails>(SUBAGENT_CONTROL_MESSAGE_TYPE, (message, _options, theme) => {
+			const details = message.details as SubagentControlMessageDetails | undefined;
+			if (!details?.event) return undefined;
+			const content = typeof message.content === "string" ? message.content : undefined;
+			return new SubagentControlNoticeComponent({ ...details, noticeText: formatSubagentControlNotice(details, content) }, theme);
+		});
+	}
 
 	const executeSubagentCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
 		return executor.execute(id, params, signal, onUpdate, ctx);
 	};
 
-	const slashBridge = registerSlashSubagentBridge({
-		events: pi.events,
-		getContext: () => state.lastUiContext,
-		execute: (id, params, signal, onUpdate, ctx) =>
-			executeSubagentCollapsed(id, params, signal, onUpdate, ctx),
-	});
+	const slashBridge = childMode
+		? { cancelAll() {}, dispose() {} }
+		: registerSlashSubagentBridge({
+			events: pi.events,
+			getContext: () => state.lastUiContext,
+			execute: (id, params, signal, onUpdate, ctx) =>
+				executeSubagentCollapsed(id, params, signal, onUpdate, ctx),
+		});
 
-	const promptTemplateBridge = registerPromptTemplateDelegationBridge({
-		events: pi.events,
-		getContext: () => state.lastUiContext,
-		execute: async (requestId, request, signal, ctx, onUpdate) => {
-			if (request.tasks && request.tasks.length > 0) {
+	const promptTemplateBridge = childMode
+		? { cancelAll() {}, dispose() {} }
+		: registerPromptTemplateDelegationBridge({
+			events: pi.events,
+			getContext: () => state.lastUiContext,
+			execute: async (requestId, request, signal, ctx, onUpdate) => {
+				if (request.tasks && request.tasks.length > 0) {
+					return executeSubagentCollapsed(
+						requestId,
+						{
+							tasks: request.tasks,
+							context: request.context,
+							cwd: request.cwd,
+							worktree: request.worktree,
+							async: false,
+							clarify: false,
+						},
+						signal,
+						onUpdate,
+						ctx,
+					);
+				}
 				return executeSubagentCollapsed(
 					requestId,
 					{
-						tasks: request.tasks,
+						agent: request.agent,
+						task: request.task,
 						context: request.context,
 						cwd: request.cwd,
-						worktree: request.worktree,
+						model: request.model,
 						async: false,
 						clarify: false,
 					},
@@ -368,24 +397,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 					onUpdate,
 					ctx,
 				);
-			}
-			return executeSubagentCollapsed(
-				requestId,
-				{
-					agent: request.agent,
-					task: request.task,
-					context: request.context,
-					cwd: request.cwd,
-					model: request.model,
-					async: false,
-					clarify: false,
-				},
-				signal,
-				onUpdate,
-				ctx,
-			);
-		},
-	});
+			},
+		});
 
 	function effectiveParallelTaskCount(tasks: Array<{ count?: unknown }> | undefined): number {
 		if (!tasks || tasks.length === 0) return 0;
@@ -424,8 +437,13 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 
 CONTROL:
 • { action: "status", id: "..." } - inspect an async/background run by id or prefix
+• { action: "tree", id?: "..." } - inspect async run hierarchy grouped by rootRunId
+• { action: "events", id: "...", type?: "subagent.step.*" } - stream run/root events.jsonl records
 • { action: "interrupt", id?: "..." } - soft-interrupt the current child turn and leave the run paused
 • { action: "resume", id: "...", message: "...", index?: 0 } - follow up with a live async child or revive a completed async/foreground child from its session
+
+COORDINATION:
+• { action: "coordination", coord: { op: "blackboard.append" | "task.post" | "task.claim" | "decision.record" | "artifact.publish" | "auction.open" | "auction.bid" | "auction.award" | "score.record" | ..., rootRunId, ... } }
 
 DIAGNOSTICS:
 • { action: "doctor" } - read-only report for runtime paths, discovery, sessions, and intercom`,
@@ -473,6 +491,7 @@ DIAGNOSTICS:
 	};
 
 	pi.registerTool(tool);
+	if (childMode) return;
 	registerSlashCommands(pi, state);
 
 	const eventUnsubscribeStoreKey = "__piSubagentEventUnsubscribes";

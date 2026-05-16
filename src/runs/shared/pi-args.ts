@@ -9,6 +9,9 @@ const PROMPT_RUNTIME_EXTENSION_PATH = path.join(path.dirname(fileURLToPath(impor
 export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
 export const SUBAGENT_ORCHESTRATOR_TARGET_ENV = "PI_SUBAGENT_ORCHESTRATOR_TARGET";
 export const SUBAGENT_RUN_ID_ENV = "PI_SUBAGENT_RUN_ID";
+export const SUBAGENT_PARENT_RUN_ID_ENV = "PI_SUBAGENT_PARENT_RUN_ID";
+export const SUBAGENT_ROOT_RUN_ID_ENV = "PI_SUBAGENT_ROOT_RUN_ID";
+export const SUBAGENT_PARENT_AGENT_ENV = "PI_SUBAGENT_PARENT_AGENT";
 export const SUBAGENT_CHILD_AGENT_ENV = "PI_SUBAGENT_CHILD_AGENT";
 export const SUBAGENT_CHILD_INDEX_ENV = "PI_SUBAGENT_CHILD_INDEX";
 
@@ -31,6 +34,8 @@ interface BuildPiArgsInput {
 	intercomSessionName?: string;
 	orchestratorIntercomTarget?: string;
 	runId?: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	childAgentName?: string;
 	childIndex?: number;
 }
@@ -132,6 +137,16 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	}
 	if (input.runId) {
 		env[SUBAGENT_RUN_ID_ENV] = input.runId;
+		const parentRunId = input.parentRunId ?? process.env[SUBAGENT_RUN_ID_ENV];
+		const rootRunId = input.rootRunId ?? process.env[SUBAGENT_ROOT_RUN_ID_ENV] ?? input.runId;
+		if (parentRunId) {
+			env[SUBAGENT_PARENT_RUN_ID_ENV] = parentRunId;
+		}
+		env[SUBAGENT_ROOT_RUN_ID_ENV] = rootRunId;
+	}
+	const parentAgent = process.env[SUBAGENT_CHILD_AGENT_ENV];
+	if (parentAgent) {
+		env[SUBAGENT_PARENT_AGENT_ENV] = parentAgent;
 	}
 	if (input.childAgentName) {
 		env[SUBAGENT_CHILD_AGENT_ENV] = input.childAgentName;

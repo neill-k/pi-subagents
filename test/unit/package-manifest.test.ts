@@ -57,3 +57,10 @@ test("Pi package resolution stays export-map safe", () => {
 		assert.equal(cjsPiPackageResolutionPattern.test(source), false, `${file} should not use CommonJS resolution for ESM-only Pi packages`);
 	}
 });
+
+test("coordination event protocol is included in package exports and files", () => {
+	const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf-8")) as { exports?: Record<string, string>; files?: string[] };
+	assert.equal(packageJson.exports?.["./event-types"], "./src/coordination/event-types.ts");
+	assert.ok(packageJson.files?.includes("src/**/*.ts"), "src/**/*.ts should include src/coordination/event-types.ts");
+	assert.ok(packageJson.files?.includes("docs/"), "docs/events.md should be included in the package");
+});

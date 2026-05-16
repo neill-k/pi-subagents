@@ -12,6 +12,7 @@
 ## [Unreleased]
 
 ### Added
+- Added coordination-kernel primitives: explicit run graph IDs, async tree/events inspection, run-local blackboard/task/decision/artifact storage, auction/bid/score events, and a public `pi-subagents/event-types` export for downstream orchestrators.
 
 ### Fixed
 

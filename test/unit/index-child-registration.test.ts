@@ -108,14 +108,23 @@ describe("subagent extension child mode", () => {
 		);
 	});
 
-	it("returns before registering parent tools, slash commands, renderers, or event handlers", () => {
+	it("registers only the policy-gated subagent tool in child mode", () => {
 		const script = String.raw`
 			import registerSubagentExtension from "./src/extension/index.ts";
 			import { SUBAGENT_CHILD_ENV } from "./src/runs/shared/pi-args.ts";
 			process.env[SUBAGENT_CHILD_ENV] = "1";
 			const calls = [];
-			const fakePi = new Proxy({}, {
-				get(_target, prop) {
+			let registeredTool;
+			const fakePi = new Proxy({
+				registerTool(tool) {
+					calls.push("registerTool");
+					registeredTool = tool;
+				},
+				events: { on() { throw new Error("child mode should not subscribe to parent events"); }, emit() {} },
+				getSessionName() { return undefined; },
+			}, {
+				get(target, prop) {
+					if (prop in target) return target[prop];
 					return (..._args) => {
 						calls.push(String(prop));
 						return undefined;
@@ -123,7 +132,10 @@ describe("subagent extension child mode", () => {
 				},
 			});
 			registerSubagentExtension(fakePi);
-			if (calls.length > 0) {
+			if (!registeredTool || registeredTool.name !== "subagent") {
+				throw new Error("Expected subagent tool registration in child mode");
+			}
+			if (calls.join(",") !== "registerTool") {
 				throw new Error("Unexpected child-mode registrations: " + calls.join(", "));
 			}
 		`;

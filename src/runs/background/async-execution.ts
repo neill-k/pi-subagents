@@ -98,6 +98,8 @@ interface AsyncChainParams {
 	ctx: AsyncExecutionContext;
 	availableModels?: AvailableModelInfo[];
 	cwd?: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig: ArtifactConfig;
@@ -119,6 +121,8 @@ interface AsyncSingleParams {
 	agentConfig: AgentConfig;
 	ctx: AsyncExecutionContext;
 	cwd?: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig: ArtifactConfig;
@@ -401,6 +405,8 @@ export function executeAsyncChain(
 				share: shareEnabled,
 				sessionDir: sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined,
 				asyncDir,
+				parentRunId: params.parentRunId,
+				rootRunId: params.rootRunId ?? id,
 				sessionId: ctx.currentSessionId,
 				piPackageRoot,
 				piArgv1: process.argv[1],
@@ -446,6 +452,8 @@ export function executeAsyncChain(
 			id,
 			pid: spawnResult.pid,
 			sessionId: ctx.currentSessionId,
+			parentRunId: params.parentRunId,
+			rootRunId: params.rootRunId ?? id,
 			mode: resultMode,
 			agent: firstAgents[0],
 			agents: flatAgents,
@@ -570,6 +578,8 @@ export function executeAsyncSingle(
 				share: shareEnabled,
 				sessionDir: sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined,
 				asyncDir,
+				parentRunId: params.parentRunId,
+				rootRunId: params.rootRunId ?? id,
 				sessionId: ctx.currentSessionId,
 				piPackageRoot,
 				piArgv1: process.argv[1],
@@ -597,6 +607,8 @@ export function executeAsyncSingle(
 			id,
 			pid: spawnResult.pid,
 			sessionId: ctx.currentSessionId,
+			parentRunId: params.parentRunId,
+			rootRunId: params.rootRunId ?? id,
 			mode: "single",
 			agent,
 			task: task?.slice(0, 50),

@@ -35,6 +35,8 @@ describe("async stale-run reconciliation", () => {
 			const resultsDir = path.join(root, "results");
 			writeStatus(asyncDir, {
 				runId: "run-dead",
+				parentRunId: "parent-run",
+				rootRunId: "root-run",
 				sessionId: "session-current",
 				mode: "single",
 				state: "running",
@@ -65,7 +67,11 @@ describe("async stale-run reconciliation", () => {
 			assert.equal(resultJson.state, "failed");
 			assert.equal(resultJson.exitCode, 1);
 			assert.match(resultJson.summary, /process 12345 exited or disappeared/);
-			assert.match(fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8"), /subagent\.run\.repaired_stale/);
+			const event = JSON.parse(fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8").trim());
+			assert.equal(event.type, "subagent.run.repaired_stale");
+			assert.equal(event.runId, "run-dead");
+			assert.equal(event.parentRunId, "parent-run");
+			assert.equal(event.rootRunId, "root-run");
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

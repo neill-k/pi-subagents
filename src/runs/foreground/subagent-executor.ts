@@ -11,11 +11,14 @@ import { executeChain } from "./chain-execution.ts";
 import { resolveExecutionAgentScope } from "../../agents/agent-scope.ts";
 import { handleManagementAction } from "../../agents/agent-management.ts";
 import { buildDoctorReport } from "../../extension/doctor.ts";
+import { handleCoordinationAction, type CoordinationActionParams } from "../../coordination/actions.ts";
 import { clearPendingForegroundControlNotices } from "../../extension/control-notices.ts";
 import { runSync } from "./execution.ts";
+import { SUBAGENT_CHILD_ENV, SUBAGENT_ROOT_RUN_ID_ENV, SUBAGENT_RUN_ID_ENV } from "../shared/pi-args.ts";
 import { resolveModelCandidate } from "../shared/model-fallback.ts";
 import { aggregateParallelOutputs } from "../shared/parallel-utils.ts";
 import { recordRun } from "../shared/run-history.ts";
+import { reserveDelegation, type DelegationReservation } from "../shared/delegation-guard.ts";
 import {
 	buildChainInstructions,
 	writeInitialProgressFile,
@@ -47,6 +50,8 @@ import {
 } from "../../intercom/result-intercom.ts";
 import { buildRevivedAsyncTask, resolveAsyncResumeTarget } from "../background/async-resume.ts";
 import { inspectSubagentStatus } from "../background/run-status.ts";
+import { inspectSubagentEvents } from "../background/inspect-events.ts";
+import { inspectSubagentTree } from "../background/inspect-tree.ts";
 import { applyForceTopLevelAsyncOverride } from "../background/top-level-async.ts";
 import {
 	cleanupWorktrees,
@@ -101,6 +106,8 @@ interface TaskParam {
 export interface SubagentParamsLike {
 	action?: string;
 	id?: string;
+	type?: string;
+	coord?: CoordinationActionParams["coord"];
 	runId?: string;
 	dir?: string;
 	index?: number;
@@ -148,6 +155,8 @@ interface ExecutionContextData {
 	onUpdate?: (r: AgentToolResult<Details>) => void;
 	agents: AgentConfig[];
 	runId: string;
+	parentRunId?: string;
+	rootRunId: string;
 	shareEnabled: boolean;
 	sessionRoot: string;
 	sessionDirForIndex: (idx?: number) => string;
@@ -700,6 +709,13 @@ function applyAgentDefaultContext(params: SubagentParamsLike, agents: AgentConfi
 		: params;
 }
 
+function collectRequestedChildAgents(params: SubagentParamsLike): string[] {
+	if (params.agent) return [params.agent];
+	if (params.tasks) return params.tasks.map((task) => task.agent);
+	if (params.chain) return params.chain.flatMap((step) => getStepAgents(step));
+	return [];
+}
+
 function buildRequestedModeError(params: SubagentParamsLike, message: string): AgentToolResult<Details> {
 	return withForkContext(
 		{
@@ -926,6 +942,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			ctx: asyncCtx,
 			availableModels,
 			cwd: effectiveCwd,
+			parentRunId: data.parentRunId,
+			rootRunId: data.rootRunId,
 			maxOutput: params.maxOutput,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
@@ -953,6 +971,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			ctx: asyncCtx,
 			availableModels,
 			cwd: effectiveCwd,
+			parentRunId: data.parentRunId,
+			rootRunId: data.rootRunId,
 			maxOutput: params.maxOutput,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
@@ -992,6 +1012,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			ctx: asyncCtx,
 			availableModels,
 			cwd: effectiveCwd,
+			parentRunId: data.parentRunId,
+			rootRunId: data.rootRunId,
 			maxOutput: params.maxOutput,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
@@ -1046,6 +1068,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		intercomEvents: deps.pi.events,
 		signal,
 		runId,
+		parentRunId: data.parentRunId,
+		rootRunId: data.rootRunId,
 		cwd: effectiveCwd,
 		shareEnabled,
 		sessionDirForIndex,
@@ -1090,6 +1114,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			ctx: asyncCtx,
 			availableModels: ctx.modelRegistry.getAvailable().map(toModelInfo),
 			cwd: effectiveCwd,
+			parentRunId: data.parentRunId,
+			rootRunId: data.rootRunId,
 			maxOutput: params.maxOutput,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
@@ -1136,6 +1162,8 @@ interface ForegroundParallelRunInput {
 	intercomEvents: IntercomEventBus;
 	signal: AbortSignal;
 	runId: string;
+	parentRunId?: string;
+	rootRunId: string;
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex: (idx?: number) => string | undefined;
 	shareEnabled: boolean;
@@ -1297,6 +1325,8 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			allowIntercomDetach: agentConfig?.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
 			intercomEvents: input.intercomEvents,
 			runId: input.runId,
+			parentRunId: input.parentRunId,
+			rootRunId: input.rootRunId,
 			index,
 			sessionDir: input.sessionDirForIndex(index),
 			sessionFile: input.sessionFileForIndex(index),
@@ -1578,6 +1608,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			intercomEvents: deps.pi.events,
 			signal,
 			runId,
+			parentRunId: data.parentRunId,
+			rootRunId: data.rootRunId,
 			sessionDirForIndex,
 			sessionFileForIndex,
 			shareEnabled,
@@ -1855,6 +1887,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		allowIntercomDetach: agentConfig.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
 		intercomEvents: deps.pi.events,
 		runId,
+		parentRunId: data.parentRunId,
+		rootRunId: data.rootRunId,
 		sessionDir: sessionDirForIndex(0),
 		sessionFile: sessionFileForIndex(0),
 		share: shareEnabled,
@@ -1979,6 +2013,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const requestCwd = resolveRequestedCwd(ctx.cwd, params.cwd);
 		const paramsWithResolvedCwd = params.cwd === undefined ? params : { ...params, cwd: requestCwd };
 		if (params.action) {
+			const childAllowedActions = new Set(["status", "tree", "events", "coordination"]);
+			if (process.env[SUBAGENT_CHILD_ENV] === "1" && !childAllowedActions.has(params.action)) {
+				return {
+					content: [{ type: "text", text: `Child subagents can only use status, tree, events, and coordination actions; requested ${params.action}.` }],
+					isError: true,
+					details: { mode: "management", results: [] },
+				};
+			}
 			if (params.action === "doctor") {
 				let currentSessionFile: string | null = null;
 				let currentSessionId = deps.state.currentSessionId;
@@ -2016,6 +2058,22 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				const foreground = getForegroundControl(deps.state, paramsWithResolvedCwd.id ?? paramsWithResolvedCwd.runId);
 				if (foreground) return foregroundStatusResult(foreground);
 				return inspectSubagentStatus(paramsWithResolvedCwd);
+			}
+			if (params.action === "tree") {
+				return inspectSubagentTree(paramsWithResolvedCwd);
+			}
+			if (params.action === "events") {
+				return inspectSubagentEvents(paramsWithResolvedCwd);
+			}
+			if (params.action === "coordination") {
+				const scope: AgentScope = resolveExecutionAgentScope(paramsWithResolvedCwd.agentScope);
+				return handleCoordinationAction(
+					paramsWithResolvedCwd,
+					{
+						pi: deps.pi,
+						agents: deps.discoverAgents(requestCwd, scope).agents,
+					},
+				);
 			}
 			if (params.action === "resume") {
 				return resumeAsyncRun({ params: paramsWithResolvedCwd, requestCwd, ctx, deps });
@@ -2101,6 +2159,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			? discoveredAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))
 			: discoveredAgents;
 		const runId = randomUUID().slice(0, 8);
+		const parentRunId = process.env[SUBAGENT_RUN_ID_ENV];
+		const rootRunId = process.env[SUBAGENT_ROOT_RUN_ID_ENV] ?? runId;
 		const shareEnabled = effectiveParams.share === true;
 		const hasChain = (effectiveParams.chain?.length ?? 0) > 0;
 		const hasTasks = (effectiveParams.tasks?.length ?? 0) > 0;
@@ -2119,6 +2179,22 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			allowClarifyTaskPrompt,
 		);
 		if (validationError) return validationError;
+
+		let delegationReservation: DelegationReservation | undefined;
+		const delegation = reserveDelegation({
+			agents,
+			childAgents: collectRequestedChildAgents(effectiveParams),
+			runId,
+			rootRunId,
+		});
+		if (!delegation.ok) {
+			return {
+				content: [{ type: "text", text: delegation.error ?? "Delegation blocked." }],
+				isError: true,
+				details: { mode: getRequestedModeLabel(effectiveParams), results: [] },
+			};
+		}
+		delegationReservation = delegation.reservation;
 
 		let sessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
 		try {
@@ -2172,6 +2248,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			onUpdate: onUpdateWithContext,
 			agents,
 			runId,
+			parentRunId,
+			rootRunId,
 			shareEnabled,
 			sessionRoot,
 			sessionDirForIndex,
@@ -2211,6 +2289,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		} catch (error) {
 			return toExecutionErrorResult(effectiveParams, error);
 		} finally {
+			delegationReservation?.release();
 			if (foregroundControl) {
 				clearPendingForegroundControlNotices(deps.state, runId);
 				deps.state.foregroundControls.delete(runId);

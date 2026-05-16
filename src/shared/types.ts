@@ -83,6 +83,8 @@ export interface ControlEvent {
 	agent: string;
 	index?: number;
 	runId: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	message: string;
 	reason?: "idle" | "completion_guard" | "active_long_running" | "tool_failures" | "time_threshold" | "turn_threshold" | "token_threshold";
 	turns?: number;
@@ -266,6 +268,8 @@ export interface AsyncStartedEvent {
 	asyncDir?: string;
 	pid?: number;
 	sessionId?: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	mode?: SubagentRunMode;
 	agent?: string;
 	agents?: string[];
@@ -276,6 +280,8 @@ export interface AsyncStartedEvent {
 
 export interface AsyncStatus {
 	runId: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	sessionId?: string;
 	mode: SubagentRunMode;
 	state: "queued" | "running" | "complete" | "failed" | "paused";
@@ -334,6 +340,8 @@ export interface AsyncJobState {
 	asyncId: string;
 	asyncDir: string;
 	status: "queued" | "running" | "complete" | "failed" | "paused";
+	parentRunId?: string;
+	rootRunId?: string;
 	pid?: number;
 	sessionId?: string;
 	activityState?: ActivityState;
@@ -446,6 +454,7 @@ export const SUBAGENT_CONTROL_EVENT = "subagent:control-event";
 export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
 export const SUBAGENT_RESULT_INTERCOM_EVENT = "subagent:result-intercom";
 export const SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT = "subagent:result-intercom-delivery";
+export const SUBAGENT_COORDINATION_EVENT = "subagent:coordination-event";
 
 // ============================================================================
 // Execution Options
@@ -466,6 +475,8 @@ export interface RunSyncOptions {
 	artifactsDir?: string;
 	artifactConfig?: ArtifactConfig;
 	runId: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	index?: number;
 	sessionDir?: string;
 	sessionFile?: string;
@@ -595,7 +606,7 @@ export const SLASH_SUBAGENT_CANCEL_EVENT = "subagent:slash:cancel";
 export const POLL_INTERVAL_MS = 250;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
-export const SUBAGENT_ACTIONS = ["list", "get", "create", "update", "delete", "status", "interrupt", "resume", "doctor"] as const;
+export const SUBAGENT_ACTIONS = ["list", "get", "create", "update", "delete", "status", "interrupt", "resume", "tree", "events", "coordination", "doctor"] as const;
 
 export const DEFAULT_FORK_PREAMBLE =
 	"You are a delegated subagent running from a fork of the parent session. " +

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { RESULTS_DIR, type AsyncParallelGroupStatus, type AsyncStatus, type SubagentRunMode } from "../../shared/types.ts";
+import { envelopEvent } from "../shared/event-envelope.ts";
 import { normalizeParallelGroups } from "./parallel-groups.ts";
 
 export type PidLiveness = "alive" | "dead" | "unknown";
@@ -10,6 +11,8 @@ type KillFn = (pid: number, signal?: NodeJS.Signals | 0) => boolean;
 
 interface StartedRunMetadata {
 	runId: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	pid?: number;
 	sessionId?: string;
 	mode?: SubagentRunMode;
@@ -145,6 +148,8 @@ function buildStartedStatus(asyncDir: string, startedRun: StartedRunMetadata, no
 		: [];
 	return {
 		runId: startedRun.runId || path.basename(asyncDir),
+		...(startedRun.parentRunId ? { parentRunId: startedRun.parentRunId } : {}),
+		rootRunId: startedRun.rootRunId ?? startedRun.runId ?? path.basename(asyncDir),
 		...(startedRun.sessionId ? { sessionId: startedRun.sessionId } : {}),
 		mode: startedRun.mode ?? "single",
 		state: "running",
@@ -222,14 +227,23 @@ function writeFailedRepair(asyncDir: string, status: AsyncStatus, resultPath: st
 	const repair = buildFailedRepair(status, asyncDir, now, reason);
 	writeAtomicJson(resultPath, repair.result);
 	writeAtomicJson(path.join(asyncDir, "status.json"), repair.status);
-	appendJsonl(path.join(asyncDir, "events.jsonl"), {
-		type: "subagent.run.repaired_stale",
-		ts: now,
-		runId: repair.status.runId,
-		pid: status.pid,
-		resultPath,
-		message: repair.message,
-	});
+	appendJsonl(
+		path.join(asyncDir, "events.jsonl"),
+		envelopEvent(
+			{
+				runId: repair.status.runId,
+				parentRunId: repair.status.parentRunId,
+				rootRunId: repair.status.rootRunId ?? repair.status.runId,
+			},
+			{
+				type: "subagent.run.repaired_stale",
+				ts: now,
+				pid: status.pid,
+				resultPath,
+				message: repair.message,
+			},
+		),
+	);
 	return { status: repair.status, repaired: true, resultPath, message: repair.message };
 }
 
